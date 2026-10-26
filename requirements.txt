@@ -1,0 +1,18 @@
+# From NCM (eval + models)
+torch>=2.1
+numpy
+pyyaml
+omegaconf
+hydra-core
+transformers
+datasets
+tokenizers
+sacrebleu
+rouge-score
+tqdm
+wandb
+einops
+# training extras
+accelerate
+deepspeed
+bitsandbytes
