@@ -1,19 +1,18 @@
-"""M1: train the multiscale residual VQ-VAE tokenizer.
-
-Usage (on cluster with GPU):
-    python training/train_tokenizer.py --config configs/eval/lm1b-small.yaml \
-        --data /path/to/lm1b.txt --out artifacts/lm1b-small/tokenizer.pt
-"""
+"""M1: train the multiscale residual VQ-VAE tokenizer (robust)."""
 import argparse, os, glob, yaml, torch, torch.nn as nn, torch.nn.functional as F
+import random, math
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 from models.vqvae import VQVAE
 from omegaconf import OmegaConf
+from tqdm import tqdm
 
+def set_seed(seed):
+    random.seed(seed); torch.manual_seed(seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
 class TextChunkDataset(Dataset):
     def __init__(self, paths, hf_tok, context_length, max_chunks=100000):
-        self.ctx = context_length
         toks = []
         for p in paths:
             with open(p, encoding="utf-8", errors="ignore") as f:
@@ -24,80 +23,92 @@ class TextChunkDataset(Dataset):
         for c in self.chunks:
             if len(c) < context_length:
                 c += [self.pad] * (context_length - len(c))
-
-    def __len__(self):
-        return len(self.chunks)
-
-    def __getitem__(self, i):
-        return torch.tensor(self.chunks[i], dtype=torch.long)
-
+        if not self.chunks: raise ValueError("No chunks produced.")
+    def __len__(self): return len(self.chunks)
+    def __getitem__(self, i): return torch.tensor(self.chunks[i], dtype=torch.long)
 
 def build_vqvae(cfg):
     tcfg = cfg["tokenizer"]["vqvae"]
     vqcfg = OmegaConf.create(tcfg["vector_quantizer_config"])
-    vqvae = VQVAE(
-        in_vocab_size=tcfg["in_vocab_size"],
-        context_length=tcfg["context_length"],
-        embed_dim=tcfg["embed_dim"],
-        vqvae_vocab_size=tcfg["vqvae_vocab_size"],
-        n_layers=tcfg["n_layers"],
-        vector_quantizer_config=vqcfg,
-        compression_factor=tcfg.get("compression_factor", 1),
-        dropout=tcfg.get("dropout", 0.1),
-        pre_quant_groupnorm=tcfg.get("pre_quant_groupnorm", 4),
-        pre_quant_dropout=tcfg.get("pre_quant_dropout", 0.0),
-        use_qk_norm=tcfg.get("use_qk_norm", False),
-        enc_positional=tcfg.get("enc_positional", False),
-        dec_positional=tcfg.get("dec_positional", True),
-        dec_layers=tcfg.get("dec_layers", 4),
-    )
-    return vqvae
+    return VQVAE(in_vocab_size=tcfg["in_vocab_size"], context_length=tcfg["context_length"],
+        embed_dim=tcfg["embed_dim"], vqvae_vocab_size=tcfg["vqvae_vocab_size"],
+        n_layers=tcfg["n_layers"], vector_quantizer_config=vqcfg,
+        compression_factor=tcfg.get("compression_factor", 1), dropout=tcfg.get("dropout", 0.1),
+        pre_quant_groupnorm=tcfg.get("pre_quant_groupnorm", 4), pre_quant_dropout=tcfg.get("pre_quant_dropout", 0.0),
+        use_qk_norm=tcfg.get("use_qk_norm", False), enc_positional=tcfg.get("enc_positional", False),
+        dec_positional=tcfg.get("dec_positional", True), dec_layers=tcfg.get("dec_layers", 4))
 
+def cosine_lr(step, total, base, warmup):
+    if step < warmup: return base * (step + 1) / max(1, warmup)
+    prog = (step - warmup) / max(1, total - warmup)
+    return base * 0.5 * (1 + math.cos(math.pi * prog))
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--data", required=True, help="file or dir of text")
-    ap.add_argument("--out", default="tokenizer.pt")
-    ap.add_argument("--epochs", type=int, default=1)
-    ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--max-chunks", type=int, default=20000)
+    ap.add_argument("--config", required=True); ap.add_argument("--data", required=True)
+    ap.add_argument("--out", default="tokenizer.pt"); ap.add_argument("--epochs", type=int, default=1)
+    ap.add_argument("--batch", type=int, default=8); ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--max-chunks", type=int, default=20000); ap.add_argument("--grad-accum", type=int, default=1)
+    ap.add_argument("--warmup", type=int, default=100); ap.add_argument("--amp", action="store_true")
+    ap.add_argument("--resume", default=None); ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
-
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-    tcfg = cfg["tokenizer"]
-    pre = tcfg["pre_tokenizer"]
+    set_seed(args.seed)
+    if not os.path.exists(args.config): raise FileNotFoundError(args.config)
+    with open(args.config) as f: cfg = yaml.safe_load(f)
+    tcfg = cfg["tokenizer"]; pre = tcfg["pre_tokenizer"]
     hf_tok = AutoTokenizer.from_pretrained(pre["model_id"])
-    if pre.get("special_tokens"):
-        hf_tok.add_special_tokens(pre["special_tokens"])
-
+    if pre.get("special_tokens"): hf_tok.add_special_tokens(pre["special_tokens"])
     paths = [args.data] if os.path.isfile(args.data) else sorted(glob.glob(os.path.join(args.data, "**", "*"), recursive=True))
     paths = [p for p in paths if os.path.isfile(p)]
+    if not paths: raise FileNotFoundError(f"No data files at {args.data}")
     ds = TextChunkDataset(paths, hf_tok, tcfg["vqvae"]["context_length"], args.max_chunks)
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, num_workers=2)
-
+    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, num_workers=2, pin_memory=True)
+    print(f"Dataset: {len(ds)} chunks, {len(dl)} batches/epoch")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     vqvae = build_vqvae(cfg).to(device)
-    opt = torch.optim.AdamW(vqvae.parameters(), lr=args.lr)
-
+    opt = torch.optim.AdamW(vqvae.parameters(), lr=args.lr, weight_decay=0.01)
+    scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device == "cuda")
+    start_epoch, global_step, best_loss = 0, 0, float("inf")
+    if args.resume and os.path.exists(args.resume):
+        ck = torch.load(args.resume, map_location=device)
+        vqvae.load_state_dict(ck["model"])
+        if "opt" in ck: opt.load_state_dict(ck["opt"])
+        start_epoch = ck.get("epoch", 0); global_step = ck.get("step", 0)
+        best_loss = ck.get("best_loss", best_loss)
+        print(f"Resumed epoch {start_epoch}")
+    total_steps = args.epochs * len(dl)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     vqvae.train()
-    for ep in range(args.epochs):
-        for step, batch in enumerate(dl):
-            batch = batch.to(device)
-            recon, vq_loss, *_ = vqvae(batch)
-            ce = F.cross_entropy(recon.reshape(-1, recon.size(-1)), batch.reshape(-1))
-            loss = ce + (vq_loss if torch.is_tensor(vq_loss) else 0.0)
-            opt.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(vqvae.parameters(), 1.0)
-            opt.step()
-            if step % 50 == 0:
-                print(f"ep{ep} step{step} ce={ce.item():.4f} vq={float(vq_loss):.4f}")
-    torch.save({"model": vqvae.state_dict()}, args.out)
-    print("saved", args.out)
-
+    for ep in range(start_epoch, args.epochs):
+        pbar = tqdm(dl, desc=f"epoch {ep+1}/{args.epochs}")
+        running = 0.0; opt.zero_grad()
+        for step, batch in enumerate(pbar):
+            batch = batch.to(device, non_blocking=True)
+            with torch.cuda.amp.autocast(enabled=args.amp and device == "cuda"):
+                recon, vq_loss, *_ = vqvae(batch)
+                ce = F.cross_entropy(recon.reshape(-1, recon.size(-1)), batch.reshape(-1))
+                vq = vq_loss if torch.is_tensor(vq_loss) else torch.tensor(0.0, device=device)
+                loss = (ce + vq) / args.grad_accum
+            scaler.scale(loss).backward()
+            running += (ce + vq).item()
+            if (step + 1) % args.grad_accum == 0:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(vqvae.parameters(), 1.0)
+                lr = cosine_lr(global_step, total_steps, args.lr, args.warmup)
+                for g in opt.param_groups: g["lr"] = lr
+                scaler.step(opt); scaler.update(); opt.zero_grad(); global_step += 1
+            pbar.set_postfix(ce=f"{ce.item():.3f}", vq=f"{float(vq):.3f}")
+        epoch_loss = running / len(dl)
+        print(f"epoch {ep+1}: avg_loss={epoch_loss:.4f}")
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
+            torch.save({"model": vqvae.state_dict(), "opt": opt.state_dict(),
+                        "epoch": ep+1, "step": global_step, "best_loss": best_loss}, args.out)
+            print(f"  -> best ckpt saved ({best_loss:.4f})")
+        torch.save({"model": vqvae.state_dict(), "opt": opt.state_dict(),
+                    "epoch": ep+1, "step": global_step, "best_loss": best_loss},
+                   os.path.join(os.path.dirname(args.out) or ".", "tokenizer_last.pt"))
+    print(f"Done. best_loss={best_loss:.4f} -> {args.out}")
 
 if __name__ == "__main__":
     main()
