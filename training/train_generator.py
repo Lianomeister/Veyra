@@ -26,9 +26,11 @@ class NCMChunkDataset(Dataset):
         P = cfg["model"]["prefix_len"]
         with torch.no_grad():
             for c in chunks:
-                x = torch.tensor([c], dtype=torch.long)
+                dev = next(vqvae.parameters()).device
+                x = torch.tensor([c], dtype=torch.long, device=dev)
                 inp, target = vqvae.get_ncm_inputs(x)
-                pref_emb = vqvae.encoder.wte(torch.tensor([[prefix_id]*P]))
+                dev = next(vqvae.parameters()).device
+                pref_emb = vqvae.encoder.wte(torch.tensor([[prefix_id]*P], device=dev))
                 inp = torch.cat([pref_emb, inp], dim=1)
                 self.samples.append((inp.squeeze(0).cpu(), target.squeeze(0).cpu()))
         if not self.samples: raise ValueError("No samples produced.")
