@@ -164,6 +164,36 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+class MoEMLP(nn.Module):
+    """Mixture-of-Experts MLP: more capacity per FLOP (top-k routing)."""
+    def __init__(self, config):
+        super().__init__()
+        self.n_experts = int(getattr(config, "n_experts", 4))
+        self.top_k = int(getattr(config, "moe_top_k", 2))
+        self.experts = nn.ModuleList([MLP(config) for _ in range(self.n_experts)])
+        self.gate = nn.Linear(config.n_embd, self.n_experts, bias=False)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        B, T, C = x.shape
+        logits = self.gate(x)                       # (B,T,E)
+        weights = torch.softmax(logits, dim=-1)
+        topw, topi = weights.topk(self.top_k, dim=-1)  # (B,T,k)
+        topw = topw / topw.sum(dim=-1, keepdim=True)
+        out = torch.zeros_like(x)
+        for k in range(self.top_k):
+            ei = topi[..., k]                       # (B,T)
+            w = topw[..., k].unsqueeze(-1)          # (B,T,1)
+            for e in range(self.n_experts):
+                mask = (ei == e)
+                if not mask.any():
+                    continue
+                sel = mask.unsqueeze(-1).expand_as(x)
+                expert_out = self.experts[e](x)
+                out = out + w * expert_out * mask.unsqueeze(-1).to(x.dtype)
+        return self.dropout(out)
+
+
 class Block(nn.Module):
     
     def __init__(self, config):
@@ -171,7 +201,10 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = SelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+        if bool(getattr(config, "use_moe", False)):
+            self.mlp = MoEMLP(config)
+        else:
+            self.mlp = MLP(config)
         self.parallel_block = bool(getattr(config, "parallel_block", False))
         self.normformer = bool(getattr(config, "normformer", False))
         if self.normformer:
