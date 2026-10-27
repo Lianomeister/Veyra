@@ -107,7 +107,7 @@ NCM repo ships eval only - training code must be implemented by us. Biggest engi
 
 - M0: Plan + repo scaffold + environment. (done)
 - M1 (code-complete): Reproduce LM1B-small training & eval (gate). Training/eval code + docs ready; execution & gate validation on cluster. See docs/M1.md.
-- M2: Tokenizer trained at target scale, frozen, released.
+- M2 (in progress): Tokenizer at scale. See docs/M2.md.
 - M3: 7B generator pretrained; scaling-law report.
 - M4: Instruction-tuned variant.
 - M5: Eval suite + model cards + release.
