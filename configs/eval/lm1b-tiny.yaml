@@ -18,9 +18,8 @@ model:
   - 1024
   - 1024
   - 1024
-  - 1024
   predict_level0: false
-  query_level0: true
+  query_level0: false
   attn_pattern: block_diagonal
   use_positional_encoding: true
   use_level_encoding: true
