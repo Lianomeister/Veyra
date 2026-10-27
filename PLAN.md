@@ -106,7 +106,7 @@ NCM repo ships eval only - training code must be implemented by us. Biggest engi
 ## 10. Milestones
 
 - M0: Plan + repo scaffold + environment. (done)
-- M1 (code-complete): Reproduce LM1B-small training & eval (gate). Training/eval code + docs ready; execution & gate validation on cluster. See docs/M1.md.
+- M1 (validated locally): Training pipeline (tokenizer + generator) runs on GPU (GTX 970) with tiny config. Smoke test passed. Full LM1B-small repro still pending on larger GPU. See docs/M1.md.
 - M2 (in progress): Tokenizer at scale. See docs/M2.md.
 - M3: 7B generator pretrained; scaling-law report.
 - M4: Instruction-tuned variant.
