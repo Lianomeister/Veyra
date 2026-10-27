@@ -10,7 +10,7 @@ model:
   bias: true
   dropout: 0.1
   n_embd: 128
-  context_length: 30
+  context_length: 17
   prefix_len: 1
   raw_token_prefix: true
   prefix_pad_token_id: 0
@@ -53,7 +53,7 @@ tokenizer:
     n_layers: 2
     embed_dim: 64
     in_vocab_size: 30528
-    context_length: 29
+    context_length: 16
     compression_factor: 1
     dropout: 0.1
     use_qk_norm: true
