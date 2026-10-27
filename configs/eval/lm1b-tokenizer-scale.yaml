@@ -59,10 +59,6 @@ tokenizer:
     - 8192
     - 8192
     - 8192
-    - 8192
-    - 8192
-    - 8192
-    - 8192
     checkpoint_path: tokenizer.pt
     vector_quantizer_config:
       clss: multiscale_residual_vector_quantizer
