@@ -28,6 +28,9 @@ model:
   rope_base: 10000
   use_qk_norm: true
   use_flex_attention: false
+  use_moe: true
+  n_experts: 4
+  moe_top_k: 2
   ctx_encoder:
     enabled: false
     n_layer: 2
