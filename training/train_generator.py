@@ -111,7 +111,12 @@ def main():
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with torch.cuda.amp.autocast(enabled=args.amp and device == "cuda"):
                 logits = model.forward(x)
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1)) / args.grad_accum
+                ce = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+                aux = model.moe_aux_loss() if hasattr(model, "moe_aux_loss") else 0.0
+                if torch.is_tensor(aux):
+                    loss = (ce + 0.01 * aux) / args.grad_accum
+                else:
+                    loss = ce / args.grad_accum
             scaler.scale(loss).backward()
             running += loss.item() * args.grad_accum
             if (step + 1) % args.grad_accum == 0:

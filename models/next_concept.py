@@ -518,6 +518,14 @@ class NextConceptTransformer(Transformer):
         return self.lm_heads[hidx](x[:, P:, :])
 
     @torch.no_grad()
+    def moe_aux_loss(self):
+        total = 0.0
+        for m in self.modules():
+            if isinstance(m, __import__("models.common", fromlist=["MoEMLP"]).MoEMLP) and hasattr(m, "last_aux"):
+                total = total + m.last_aux
+        return total
+
+
     def generate(self, idx, prefix_tokens, temperature=1.0, top_k=50, top_p=0.9,
                  use_kv_cache=False, cfg_scale=0.0, cfg_null_eos=50256):
         assert not (self.query_level0 and use_kv_cache), \

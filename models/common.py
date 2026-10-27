@@ -188,9 +188,16 @@ class MoEMLP(nn.Module):
                 mask = (ei == e)
                 if not mask.any():
                     continue
-                sel = mask.unsqueeze(-1).expand_as(x)
                 expert_out = self.experts[e](x)
                 out = out + w * expert_out * mask.unsqueeze(-1).to(x.dtype)
+        # load-balancing aux loss (Switch Transformer)
+        # fraction of tokens routed to each expert
+        with torch.no_grad():
+            ei0 = topi[..., 0].reshape(-1)
+            counts = torch.bincount(ei0, minlength=self.n_experts).float()
+            frac = counts / counts.sum().clamp(min=1)
+        prob = weights.mean(dim=(0, 1))            # (E,)
+        self.last_aux = self.n_experts * (frac * prob).sum()
         return self.dropout(out)
 
 
