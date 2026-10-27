@@ -34,7 +34,7 @@ model:
   ctx_encoder:
     enabled: false
     n_layer: 2
-    vocab_size: 1024
+    vocab_size: 30528
   post_upsample_conv:
     enabled: true
     kernel_size: 3
@@ -52,7 +52,7 @@ tokenizer:
   vqvae:
     n_layers: 2
     embed_dim: 64
-    in_vocab_size: 1024
+    in_vocab_size: 30528
     context_length: 29
     compression_factor: 1
     dropout: 0.1
