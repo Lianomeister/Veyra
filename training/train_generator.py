@@ -13,7 +13,7 @@ def set_seed(seed):
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
 class NCMChunkDataset(Dataset):
-    def __init__(self, paths, hf_tok, vqvae, cfg, context_length, max_chunks=5000):
+    def __init__(self, paths, hf_tok, vqvae, model, cfg, context_length, max_chunks=5000):
         toks = []
         for p in paths:
             with open(p, encoding="utf-8", errors="ignore") as f:
@@ -28,10 +28,15 @@ class NCMChunkDataset(Dataset):
             for c in chunks:
                 dev = next(vqvae.parameters()).device
                 x = torch.tensor([c], dtype=torch.long, device=dev)
-                inp, target = vqvae.get_ncm_inputs(x)
+                inp, target = vqvae.get_ncm_inputs(x)  # (1, L-levels0, D), (1, L-levels0)
                 dev = next(vqvae.parameters()).device
-                pref_emb = vqvae.encoder.wte(torch.tensor([[prefix_id]*P], device=dev))
-                inp = torch.cat([pref_emb, inp], dim=1)
+                pref_emb = vqvae.encoder.wte(torch.tensor([[prefix_id]*P], device=dev))  # (1, P, D)
+                parts = [pref_emb]
+                if bool(cfg["model"].get("query_level0", False)):
+                    l0q = model.l0_queries.detach().to(dev)  # (1, levels0, D)
+                    parts.append(l0q)
+                parts.append(inp)
+                inp = torch.cat(parts, dim=1)  # (1, P + (levels0) + (L-levels0), D)
                 self.samples.append((inp.squeeze(0).cpu(), target.squeeze(0).cpu()))
         if not self.samples: raise ValueError("No samples produced.")
     def __len__(self): return len(self.samples)
@@ -100,7 +105,7 @@ def main():
     paths = [args.data] if os.path.isfile(args.data) else sorted(glob.glob(os.path.join(args.data, "**", "*"), recursive=True))
     paths = [p for p in paths if os.path.isfile(p)]
     if not paths: raise FileNotFoundError(f"No data files at {args.data}")
-    ds = NCMChunkDataset(paths, hf_tok, vqvae, cfg, cfg["tokenizer"]["vqvae"]["context_length"], args.max_chunks)
+    ds = NCMChunkDataset(paths, hf_tok, vqvae, model, cfg, cfg["tokenizer"]["vqvae"]["context_length"], args.max_chunks)
     dl = DataLoader(ds, batch_size=args.batch, shuffle=True, collate_fn=collate, num_workers=0, pin_memory=True)
     print(f"Dataset: {len(ds)} samples, {len(dl)} batches/epoch")
     total_steps = args.epochs * len(dl)
